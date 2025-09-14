@@ -1,0 +1,107 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'           # Stable releases (v4.1.0)
+      - 'v*.*.*-rc*'       # Release candidates (v4.1.0-rc1)
+      - 'v*.*.*-beta*'     # Beta releases (v4.1.0-beta1)
+      - 'v*.*.*-alpha*'    # Alpha releases (v4.1.0-alpha1)
+      - 'v*.*.*-dev*'      # Development releases (v4.1.0-dev1)
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '6.0.x'
+
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Cache vcpkg packages
+      uses: actions/cache@v4
+      with:
+        path: |
+          ./vcpkg_installed/
+          ./vcpkg/
+        key: ${{ runner.os }}-vcpkg-${{ hashFiles('lutdwm/vcpkg.json') }}
+        restore-keys: |
+          ${{ runner.os }}-vcpkg-
+
+    - name: Install vcpkg
+      run: |
+        git clone https://github.com/microsoft/vcpkg.git
+        cd vcpkg
+        ./bootstrap-vcpkg.bat
+        cd ..
+
+    - name: Configure vcpkg
+      run: |
+        cd vcpkg
+        ./vcpkg integrate install
+        cd ..
+
+    - name: Restore NuGet packages
+      run: nuget restore lutdwm.sln
+
+    - name: Build Solution
+      run: msbuild lutdwm.sln /p:Configuration=Release /p:Platform=x64
+
+    - name: Determine Release Type
+      id: release_type
+      run: |
+        if ("${{ github.ref_name }}" -match 'v.*-alpha.*') {
+          echo "is_prerelease=true" >> $env:GITHUB_OUTPUT
+          echo "release_name=DwmLut ${{ github.ref_name }} (Alpha)" >> $env:GITHUB_OUTPUT
+          echo "package_name=DwmLut-alpha-${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
+        } elseif ("${{ github.ref_name }}" -match 'v.*-beta.*') {
+          echo "is_prerelease=true" >> $env:GITHUB_OUTPUT
+          echo "release_name=DwmLut ${{ github.ref_name }} (Beta)" >> $env:GITHUB_OUTPUT
+          echo "package_name=DwmLut-beta-${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
+        } elseif ("${{ github.ref_name }}" -match 'v.*-rc.*') {
+          echo "is_prerelease=true" >> $env:GITHUB_OUTPUT
+          echo "release_name=DwmLut ${{ github.ref_name }} (Release Candidate)" >> $env:GITHUB_OUTPUT
+          echo "package_name=DwmLut-rc-${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
+        } elseif ("${{ github.ref_name }}" -match 'v.*-dev.*') {
+          echo "is_prerelease=true" >> $env:GITHUB_OUTPUT
+          echo "release_name=DwmLut ${{ github.ref_name }} (Development)" >> $env:GITHUB_OUTPUT
+          echo "package_name=DwmLut-dev-${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
+        } else {
+          echo "is_prerelease=false" >> $env:GITHUB_OUTPUT
+          echo "release_name=DwmLut ${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
+          echo "package_name=DwmLut-${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
+        }
+
+    - name: Create Release Package
+      run: |
+        mkdir ReleasePackage
+        copy "DwmLutGUI\bin\x64\Release\*.exe" ReleasePackage\
+        copy "DwmLutGUI\bin\x64\Release\*.dll" ReleasePackage\
+        copy "lutdwm\x64\Release\*.dll" ReleasePackage\
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.release_type.outputs.package_name }}
+        path: ReleasePackage/
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          ReleasePackage/*.exe
+          ReleasePackage/*.dll
+        name: ${{ steps.release_type.outputs.release_name }}
+        draft: false
+        prerelease: ${{ steps.release_type.outputs.is_prerelease }}
+        generate_release_notes: true
+        fail_on_unmatched_files: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
