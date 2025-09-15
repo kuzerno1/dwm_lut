@@ -86,9 +86,8 @@ jobs:
     - name: Create Release Package
       run: |
         mkdir ReleasePackage
-        copy "DwmLutGUI\bin\x64\Release\*.exe" ReleasePackage\
-        copy "DwmLutGUI\bin\x64\Release\*.dll" ReleasePackage\
-        copy "lutdwm\x64\Release\*.dll" ReleasePackage\
+        copy "DwmLutGUI\DwmLutGUI\bin\x64\Release\*" ReleasePackage\
+        copy "x64\Release\*" ReleasePackage\
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
