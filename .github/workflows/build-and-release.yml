@@ -9,13 +9,18 @@ on:
       - 'v*.*.*-alpha*'    # Alpha releases (v4.1.0-alpha1)
       - 'v*.*.*-dev*'      # Development releases (v4.1.0-dev1)
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
@@ -24,6 +29,14 @@ jobs:
 
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
+
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/packages.config') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
 
     - name: Cache vcpkg packages
       uses: actions/cache@v4
@@ -61,33 +74,42 @@ jobs:
     - name: Determine Release Type
       id: release_type
       run: |
-        if ("${{ github.ref_name }}" -match 'v.*-alpha.*') {
-          echo "is_prerelease=true" >> $env:GITHUB_OUTPUT
-          echo "release_name=DwmLut ${{ github.ref_name }} (Alpha)" >> $env:GITHUB_OUTPUT
-          echo "package_name=DwmLut-alpha-${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
-        } elseif ("${{ github.ref_name }}" -match 'v.*-beta.*') {
-          echo "is_prerelease=true" >> $env:GITHUB_OUTPUT
-          echo "release_name=DwmLut ${{ github.ref_name }} (Beta)" >> $env:GITHUB_OUTPUT
-          echo "package_name=DwmLut-beta-${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
-        } elseif ("${{ github.ref_name }}" -match 'v.*-rc.*') {
-          echo "is_prerelease=true" >> $env:GITHUB_OUTPUT
-          echo "release_name=DwmLut ${{ github.ref_name }} (Release Candidate)" >> $env:GITHUB_OUTPUT
-          echo "package_name=DwmLut-rc-${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
-        } elseif ("${{ github.ref_name }}" -match 'v.*-dev.*') {
-          echo "is_prerelease=true" >> $env:GITHUB_OUTPUT
-          echo "release_name=DwmLut ${{ github.ref_name }} (Development)" >> $env:GITHUB_OUTPUT
-          echo "package_name=DwmLut-dev-${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
-        } else {
-          echo "is_prerelease=false" >> $env:GITHUB_OUTPUT
-          echo "release_name=DwmLut ${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
-          echo "package_name=DwmLut-${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
+        $tag = "${{ github.ref_name }}"
+        $isPrerelease = $false
+        $releaseSuffix = ""
+        $releaseType = ""
+
+        if ($tag -match 'v.*-(alpha|beta|rc|dev).*') {
+          $isPrerelease = $true
+          $releaseSuffix = "-$($matches[1])"
+          switch ($matches[1]) {
+            'alpha' { $releaseType = " (Alpha)" }
+            'beta' { $releaseType = " (Beta)" }
+            'rc' { $releaseType = " (Release Candidate)" }
+            'dev' { $releaseType = " (Development)" }
+          }
         }
+
+        echo "is_prerelease=$isPrerelease" >> $env:GITHUB_OUTPUT
+        echo "release_name=DwmLut $tag$releaseType" >> $env:GITHUB_OUTPUT
+        echo "package_name=DwmLut$releaseSuffix-$tag" >> $env:GITHUB_OUTPUT
 
     - name: Create Release Package
       run: |
         mkdir ReleasePackage
         copy "DwmLutGUI\DwmLutGUI\bin\x64\Release\*" ReleasePackage\
         copy "x64\Release\dwm_lut.dll" ReleasePackage\
+
+    - name: Verify Build Artifacts
+      run: |
+        if (-not (Test-Path "DwmLutGUI\DwmLutGUI\bin\x64\Release\DwmLutGUI.exe")) {
+          Write-Error "DwmLutGUI.exe not found in build output"
+          exit 1
+        }
+        if (-not (Test-Path "x64\Release\dwm_lut.dll")) {
+          Write-Error "dwm_lut.dll not found in build output"
+          exit 1
+        }
 
     - name: Create Zip Archive
       run: |
