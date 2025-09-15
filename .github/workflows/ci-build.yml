@@ -61,8 +61,8 @@ jobs:
           Write-Error "DwmLutGUI.exe not found in build output"
           exit 1
         }
-        if (-not (Test-Path "lutdwm\x64\Release\lutdwm.dll")) {
-          Write-Error "lutdwm.dll not found in build output"
+        if (-not (Test-Path "x64\Release\dwm_lut.dll")) {
+          Write-Error "dwm_lut.dll not found in build output"
           exit 1
         }
         Write-Host "Build verification successful - All required files found"
