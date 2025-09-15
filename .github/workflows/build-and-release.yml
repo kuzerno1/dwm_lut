@@ -89,18 +89,21 @@ jobs:
         copy "DwmLutGUI\DwmLutGUI\bin\x64\Release\*" ReleasePackage\
         copy "x64\Release\dwm_lut.dll" ReleasePackage\
 
+    - name: Create Zip Archive
+      run: |
+        Compress-Archive -Path ReleasePackage/* -DestinationPath "${{ steps.release_type.outputs.package_name }}.zip"
+
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: ${{ steps.release_type.outputs.package_name }}
-        path: ReleasePackage/
+        path: ${{ steps.release_type.outputs.package_name }}.zip
 
     - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          ReleasePackage/*.exe
-          ReleasePackage/*.dll
+          ${{ steps.release_type.outputs.package_name }}.zip
         name: ${{ steps.release_type.outputs.release_name }}
         draft: false
         prerelease: ${{ steps.release_type.outputs.is_prerelease }}
