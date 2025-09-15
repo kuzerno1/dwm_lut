@@ -87,7 +87,7 @@ jobs:
       run: |
         mkdir ReleasePackage
         copy "DwmLutGUI\DwmLutGUI\bin\x64\Release\*" ReleasePackage\
-        copy "x64\Release\*" ReleasePackage\
+        copy "x64\Release\dwm_lut.dll" ReleasePackage\
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
