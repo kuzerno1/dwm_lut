@@ -12,7 +12,7 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
@@ -21,6 +21,14 @@ jobs:
 
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
+
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/packages.config') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
 
     - name: Cache vcpkg packages
       uses: actions/cache@v4
@@ -57,12 +65,24 @@ jobs:
 
     - name: Verify Build Output
       run: |
-        if (-not (Test-Path "DwmLutGUI\DwmLutGUI\bin\x64\Release\DwmLutGUI.exe")) {
-          Write-Error "DwmLutGUI.exe not found in build output"
+        $requiredFiles = @(
+          "DwmLutGUI\DwmLutGUI\bin\x64\Release\DwmLutGUI.exe",
+          "x64\Release\dwm_lut.dll"
+        )
+        
+        $missingFiles = @()
+        foreach ($file in $requiredFiles) {
+          if (-not (Test-Path $file)) {
+            $missingFiles += $file
+          }
+        }
+        
+        if ($missingFiles.Count -gt 0) {
+          Write-Error "Missing required build output files:"
+          foreach ($missingFile in $missingFiles) {
+            Write-Error "  - $missingFile"
+          }
           exit 1
         }
-        if (-not (Test-Path "x64\Release\dwm_lut.dll")) {
-          Write-Error "dwm_lut.dll not found in build output"
-          exit 1
-        }
-        Write-Host "Build verification successful - All required files found"
+        
+        Write-Host "Build verification successful - All $($requiredFiles.Count) required files found"
