@@ -57,7 +57,7 @@ jobs:
 
     - name: Verify Build Output
       run: |
-        if (-not (Test-Path "DwmLutGUI\bin\x64\Release\DwmLutGUI.exe")) {
+        if (-not (Test-Path "DwmLutGUI\DwmLutGUI\bin\x64\Release\DwmLutGUI.exe")) {
           Write-Error "DwmLutGUI.exe not found in build output"
           exit 1
         }
