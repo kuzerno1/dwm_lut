@@ -49,10 +49,14 @@ jobs:
         cd ..
 
     - name: Restore NuGet packages
-      run: nuget restore lutdwm.sln
+      run: |
+        nuget restore lutdwm.sln
+        nuget restore DwmLutGUI/DwmLutGUI.sln
 
-    - name: Build Solution
-      run: msbuild lutdwm.sln /p:Configuration=Release /p:Platform=x64
+    - name: Build Solutions
+      run: |
+        msbuild lutdwm.sln /p:Configuration=Release /p:Platform=x64
+        msbuild DwmLutGUI/DwmLutGUI.sln /p:Configuration=Release /p:Platform=x64
 
     - name: Determine Release Type
       id: release_type
