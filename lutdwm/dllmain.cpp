@@ -799,6 +799,9 @@ void UnsetLUTActive(void* target)
 	}
 }
 
+// Diagnostic for LUT matching
+static bool lut_match_diag_logged = false;
+
 lutData* GetLUTDataFromCOverlayContext(void* context, bool hdr)
 {
 	int left, top;
@@ -807,6 +810,28 @@ lutData* GetLUTDataFromCOverlayContext(void* context, bool hdr)
 		float* rect = (float*)((unsigned char*)*(void**)context + COverlayContext_DeviceClipBox_offset_w11);
 		left = (int)rect[0];
 		top = (int)rect[1];
+
+		// Log once for diagnostics
+		if (!lut_match_diag_logged)
+		{
+			lut_match_diag_logged = true;
+			std::stringstream ss;
+			ss << "=== LUT Matching Diagnostics ===" << std::endl;
+			ss << "  context ptr: 0x" << std::hex << (UINT_PTR)context << std::endl;
+			ss << "  *context (deref): 0x" << std::hex << (UINT_PTR)*(void**)context << std::endl;
+			ss << "  DeviceClipBox offset: 0x" << std::hex << COverlayContext_DeviceClipBox_offset_w11 << std::endl;
+			ss << "  rect ptr: 0x" << std::hex << (UINT_PTR)rect << std::endl;
+			ss << "  Detected position: left=" << std::dec << left << ", top=" << top << std::endl;
+			ss << "  Looking for LUT with hdr=" << (hdr ? "true" : "false") << std::endl;
+			ss << "  Available LUTs (" << numLuts << "):";
+			diag_log(ss.str().c_str());
+			for (int i = 0; i < numLuts; i++)
+			{
+				std::stringstream lutss;
+				lutss << "    LUT[" << i << "]: left=" << luts[i].left << ", top=" << luts[i].top << ", hdr=" << (luts[i].isHdr ? "true" : "false");
+				diag_log(lutss.str().c_str());
+			}
+		}
 	}
 	else
 	{
@@ -1161,11 +1186,43 @@ COverlayContext_Present_t* COverlayContext_Present_orig;
 COverlayContext_Present_t* COverlayContext_Present_real_orig;
 
 
+// Runtime diagnostic counters
+static int hook_call_count = 0;
+static int hook_passed_retaddr_check = 0;
+static int hook_hw_protected = 0;
+static int hook_lut_applied = 0;
+static int hook_lut_failed = 0;
+static bool runtime_diag_logged = false;
+
 long COverlayContext_Present_hook(void* self, void* overlaySwapChain, unsigned int a3, rectVec* rectVec,
                                   unsigned int a5, bool a6)
 {
+	hook_call_count++;
+
+	// Log runtime diagnostics once after some calls
+	if (!runtime_diag_logged && hook_call_count >= 100)
+	{
+		runtime_diag_logged = true;
+		std::stringstream ss;
+		ss << "=== Runtime Hook Diagnostics (after " << hook_call_count << " calls) ===";
+		diag_log(ss.str().c_str());
+		ss.str("");
+		ss << "  RetAddr check passed: " << hook_passed_retaddr_check;
+		diag_log(ss.str().c_str());
+		ss.str("");
+		ss << "  HW Protected (skipped): " << hook_hw_protected;
+		diag_log(ss.str().c_str());
+		ss.str("");
+		ss << "  LUT applied: " << hook_lut_applied;
+		diag_log(ss.str().c_str());
+		ss.str("");
+		ss << "  LUT failed: " << hook_lut_failed;
+		diag_log(ss.str().c_str());
+	}
+
 	if (_ReturnAddress() < (void*)COverlayContext_Present_real_orig)
 	{
+		hook_passed_retaddr_check++;
 		LOG_ONLY_ONCE("I am inside COverlayContext::Present hook inside the main if condition")
 
 		int hardwareProtectedOffset = IOverlaySwapChain_HardwareProtected_offset;
@@ -1181,6 +1238,7 @@ long COverlayContext_Present_hook(void* self, void* overlaySwapChain, unsigned i
 
 		if (*((bool*)overlaySwapChain + hardwareProtectedOffset))
 		{
+			hook_hw_protected++;
 			std::stringstream hw_protection_message;
 			hw_protection_message << "I'm inside the Hardware protection condition - 0x" << std::hex << (bool*)
 				overlaySwapChain + hardwareProtectedOffset << " - value: 0x" << *((bool*)
@@ -1221,11 +1279,13 @@ long COverlayContext_Present_hook(void* self, void* overlaySwapChain, unsigned i
 
 			if (ApplyLUT(self, swapChain, rectVec->start, rectVec->end - rectVec->start))
 			{
+				hook_lut_applied++;
 				LOG_ONLY_ONCE("Setting LUTactive")
 				SetLUTActive(self);
 			}
 			else
 			{
+				hook_lut_failed++;
 				LOG_ONLY_ONCE("Un-setting LUTactive")
 				UnsetLUTActive(self);
 			}
