@@ -1193,10 +1193,24 @@ static int hook_hw_protected = 0;
 static int hook_lut_applied = 0;
 static int hook_lut_failed = 0;
 static bool runtime_diag_logged = false;
+static bool first_hook_call_logged = false;
 
 long COverlayContext_Present_hook(void* self, void* overlaySwapChain, unsigned int a3, rectVec* rectVec,
                                   unsigned int a5, bool a6)
 {
+	// Log immediately on first call to verify hook is working
+	if (!first_hook_call_logged)
+	{
+		first_hook_call_logged = true;
+		std::stringstream ss;
+		ss << "=== HOOK CALLED! First Present hook invocation ===" << std::endl;
+		ss << "  self: 0x" << std::hex << (UINT_PTR)self << std::endl;
+		ss << "  overlaySwapChain: 0x" << std::hex << (UINT_PTR)overlaySwapChain << std::endl;
+		ss << "  _ReturnAddress(): 0x" << std::hex << (UINT_PTR)_ReturnAddress() << std::endl;
+		ss << "  COverlayContext_Present_real_orig: 0x" << std::hex << (UINT_PTR)COverlayContext_Present_real_orig;
+		diag_log(ss.str().c_str());
+	}
+
 	hook_call_count++;
 
 	// Log runtime diagnostics once after some calls
@@ -1624,15 +1638,46 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID lpReserved)
 				COverlayContext_OverlaysEnabled_orig && numLuts != 0)
 
 			{
-				MH_Initialize();
-				MH_CreateHook((PVOID)COverlayContext_Present_orig, (PVOID)COverlayContext_Present_hook,
+				MH_STATUS mhStatus;
+				mhStatus = MH_Initialize();
+				{
+					std::stringstream ss;
+					ss << "MH_Initialize result: " << mhStatus;
+					DIAG_LOG(ss.str().c_str());
+				}
+
+				mhStatus = MH_CreateHook((PVOID)COverlayContext_Present_orig, (PVOID)COverlayContext_Present_hook,
 				              (PVOID*)&COverlayContext_Present_orig);
-				MH_CreateHook((PVOID)COverlayContext_IsCandidateDirectFlipCompatbile_orig,
+				{
+					std::stringstream ss;
+					ss << "MH_CreateHook(Present) result: " << mhStatus;
+					DIAG_LOG(ss.str().c_str());
+				}
+
+				mhStatus = MH_CreateHook((PVOID)COverlayContext_IsCandidateDirectFlipCompatbile_orig,
 				              (PVOID)COverlayContext_IsCandidateDirectFlipCompatbile_hook,
 				              (PVOID*)&COverlayContext_IsCandidateDirectFlipCompatbile_orig);
-				MH_CreateHook((PVOID)COverlayContext_OverlaysEnabled_orig, (PVOID)COverlayContext_OverlaysEnabled_hook,
+				{
+					std::stringstream ss;
+					ss << "MH_CreateHook(DirectFlip) result: " << mhStatus;
+					DIAG_LOG(ss.str().c_str());
+				}
+
+				mhStatus = MH_CreateHook((PVOID)COverlayContext_OverlaysEnabled_orig, (PVOID)COverlayContext_OverlaysEnabled_hook,
 				              (PVOID*)&COverlayContext_OverlaysEnabled_orig);
-				MH_EnableHook(MH_ALL_HOOKS);
+				{
+					std::stringstream ss;
+					ss << "MH_CreateHook(OverlaysEnabled) result: " << mhStatus;
+					DIAG_LOG(ss.str().c_str());
+				}
+
+				mhStatus = MH_EnableHook(MH_ALL_HOOKS);
+				{
+					std::stringstream ss;
+					ss << "MH_EnableHook(MH_ALL_HOOKS) result: " << mhStatus;
+					DIAG_LOG(ss.str().c_str());
+				}
+
 				LOG_ONLY_ONCE("DWM HOOK DLL INITIALIZATION. START LOGGING")
 				MESSAGE_BOX_DBG("DWM HOOK INITIALIZATION", MB_OK)
 				DIAG_LOG("DWM Hook initialized successfully!");
