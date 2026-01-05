@@ -131,22 +131,58 @@ void diag_log_bytes(const char* prefix, const unsigned char* bytes, size_t len)
 void discover_present_patterns(unsigned char* base, size_t size)
 {
 	diag_log("=== Pattern Discovery: Searching for COverlayContext::Present candidates ===");
-	// Look for: 40 53 55 56 57 41 56 41 57 48 81 EC xx xx 00 00 (common W11 Present prologue)
-	const unsigned char partial[] = { 0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xEC };
+
+	// Pattern 1: Standard W11 prologue (40 53 55 56 57 41 56 41 57 48 81 EC)
+	const unsigned char partial1[] = { 0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xEC };
 	int found = 0;
 	for (size_t i = 0; i < size - 32 && found < 5; i++)
 	{
-		if (memcmp(base + i, partial, sizeof(partial)) == 0)
+		if (memcmp(base + i, partial1, sizeof(partial1)) == 0)
 		{
 			std::stringstream ss;
-			ss << "  Candidate at offset 0x" << std::hex << i << ": ";
+			ss << "  [Type1] Candidate at offset 0x" << std::hex << i << ": ";
 			for (int j = 0; j < 32; j++)
 				ss << std::setw(2) << std::setfill('0') << (int)base[i + j] << " ";
 			diag_log(ss.str().c_str());
 			found++;
 		}
 	}
-	if (found == 0) diag_log("  No candidates found with standard prologue");
+
+	// Pattern 2: Alternative prologue with 48 83 EC (smaller stack, sub rsp, imm8)
+	const unsigned char partial2[] = { 0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xEC };
+	for (size_t i = 0; i < size - 32 && found < 10; i++)
+	{
+		if (memcmp(base + i, partial2, sizeof(partial2)) == 0)
+		{
+			std::stringstream ss;
+			ss << "  [Type2] Candidate at offset 0x" << std::hex << i << ": ";
+			for (int j = 0; j < 32; j++)
+				ss << std::setw(2) << std::setfill('0') << (int)base[i + j] << " ";
+			diag_log(ss.str().c_str());
+			found++;
+		}
+	}
+
+	// Pattern 3: Look for push rbx, push rbp, push rsi, push rdi with different REX prefixes
+	const unsigned char partial3[] = { 0x48, 0x89, 0x5C, 0x24 }; // mov [rsp+xx], rbx - common prologue start
+	for (size_t i = 0; i < size - 48 && found < 15; i++)
+	{
+		if (memcmp(base + i, partial3, sizeof(partial3)) == 0)
+		{
+			// Check if followed by typical prologue pattern (more mov's or push's)
+			if (base[i + 5] == 0x48 || base[i + 5] == 0x4C || base[i + 5] == 0x55 || base[i + 5] == 0x56)
+			{
+				std::stringstream ss;
+				ss << "  [Type3] Candidate at offset 0x" << std::hex << i << ": ";
+				for (int j = 0; j < 48; j++)
+					ss << std::setw(2) << std::setfill('0') << (int)base[i + j] << " ";
+				diag_log(ss.str().c_str());
+				found++;
+			}
+		}
+	}
+
+	if (found == 0) diag_log("  No candidates found with any prologue type");
 }
 
 void discover_directflip_patterns(unsigned char* base, size_t size)
@@ -173,22 +209,73 @@ void discover_directflip_patterns(unsigned char* base, size_t size)
 void discover_overlays_patterns(unsigned char* base, size_t size)
 {
 	diag_log("=== Pattern Discovery: Searching for OverlaysEnabled candidates ===");
-	// Look for: 83 3D xx xx xx xx xx 7x 04 (cmp dword ptr [rip+xx], xx; jz/jnz 04)
 	int found = 0;
+
+	// Pattern 1: 83 3D ?? ?? ?? ?? ?? (74|75) 04 (cmp dword ptr [rip+xx], xx; jz/jnz 04)
 	for (size_t i = 0; i < size - 16 && found < 10; i++)
 	{
-		// Match: 83 3D ?? ?? ?? ?? ?? (74|75) 04
 		if (base[i] == 0x83 && base[i + 1] == 0x3D &&
 		    (base[i + 8] == 0x74 || base[i + 8] == 0x75) && base[i + 9] == 0x04)
 		{
 			std::stringstream ss;
-			ss << "  Candidate at offset 0x" << std::hex << i << ": ";
+			ss << "  [Type1] Candidate at offset 0x" << std::hex << i << ": ";
 			for (int j = 0; j < 16; j++)
 				ss << std::setw(2) << std::setfill('0') << (int)base[i + j] << " ";
 			diag_log(ss.str().c_str());
 			found++;
 		}
 	}
+
+	// Pattern 2: 83 3D ?? ?? ?? ?? ?? (74|75) 05 (jz/jnz +5 instead of +4)
+	for (size_t i = 0; i < size - 16 && found < 15; i++)
+	{
+		if (base[i] == 0x83 && base[i + 1] == 0x3D &&
+		    (base[i + 8] == 0x74 || base[i + 8] == 0x75) && base[i + 9] == 0x05)
+		{
+			std::stringstream ss;
+			ss << "  [Type2] Candidate at offset 0x" << std::hex << i << ": ";
+			for (int j = 0; j < 16; j++)
+				ss << std::setw(2) << std::setfill('0') << (int)base[i + j] << " ";
+			diag_log(ss.str().c_str());
+			found++;
+		}
+	}
+
+	// Pattern 3: 39 1D ?? ?? ?? ?? (74|75) - cmp [rip+xx], ebx followed by conditional jump
+	for (size_t i = 0; i < size - 16 && found < 20; i++)
+	{
+		if (base[i] == 0x39 && base[i + 1] == 0x1D &&
+		    (base[i + 6] == 0x74 || base[i + 6] == 0x75))
+		{
+			std::stringstream ss;
+			ss << "  [Type3-cmp ebx] Candidate at offset 0x" << std::hex << i << ": ";
+			for (int j = 0; j < 16; j++)
+				ss << std::setw(2) << std::setfill('0') << (int)base[i + j] << " ";
+			diag_log(ss.str().c_str());
+			found++;
+		}
+	}
+
+	// Pattern 4: Look for small functions with xor al,al; ret or mov al,1; ret (typical bool returns)
+	// Pattern: 32 C0 C3 (xor al, al; ret) or B0 01 C3 (mov al, 1; ret)
+	for (size_t i = 8; i < size - 8 && found < 25; i++)
+	{
+		// Look for patterns like: 75 04 32 c0 c3 cc or 74 04 32 c0 c3 cc
+		if ((base[i] == 0x74 || base[i] == 0x75) &&
+		    base[i + 1] >= 0x02 && base[i + 1] <= 0x06 &&
+		    base[i + 2] == 0x32 && base[i + 3] == 0xC0 && base[i + 4] == 0xC3)
+		{
+			// Look backwards for the cmp instruction
+			std::stringstream ss;
+			ss << "  [Type4-ret pattern] Found at offset 0x" << std::hex << i << ", checking context: ";
+			size_t start = (i >= 10) ? i - 10 : 0;
+			for (size_t j = start; j < i + 8; j++)
+				ss << std::setw(2) << std::setfill('0') << (int)base[j] << " ";
+			diag_log(ss.str().c_str());
+			found++;
+		}
+	}
+
 	if (found == 0) diag_log("  No candidates found");
 }
 
