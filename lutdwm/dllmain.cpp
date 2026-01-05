@@ -127,11 +127,78 @@ void diag_log_bytes(const char* prefix, const unsigned char* bytes, size_t len)
 	diag_log(ss.str().c_str());
 }
 
+// Pattern discovery: search for function prologues that match partial patterns
+void discover_present_patterns(unsigned char* base, size_t size)
+{
+	diag_log("=== Pattern Discovery: Searching for COverlayContext::Present candidates ===");
+	// Look for: 40 53 55 56 57 41 56 41 57 48 81 EC xx xx 00 00 (common W11 Present prologue)
+	const unsigned char partial[] = { 0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xEC };
+	int found = 0;
+	for (size_t i = 0; i < size - 32 && found < 5; i++)
+	{
+		if (memcmp(base + i, partial, sizeof(partial)) == 0)
+		{
+			std::stringstream ss;
+			ss << "  Candidate at offset 0x" << std::hex << i << ": ";
+			for (int j = 0; j < 32; j++)
+				ss << std::setw(2) << std::setfill('0') << (int)base[i + j] << " ";
+			diag_log(ss.str().c_str());
+			found++;
+		}
+	}
+	if (found == 0) diag_log("  No candidates found with standard prologue");
+}
+
+void discover_directflip_patterns(unsigned char* base, size_t size)
+{
+	diag_log("=== Pattern Discovery: Searching for IsCandidateDirectFlipCompatible candidates ===");
+	// Look for: 40 55 53 56 57 41 54 41 55 41 56 41 57 48 8B EC 48 83 EC xx (common DirectFlip prologue)
+	const unsigned char partial[] = { 0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8B, 0xEC, 0x48, 0x83, 0xEC };
+	int found = 0;
+	for (size_t i = 0; i < size - 32 && found < 5; i++)
+	{
+		if (memcmp(base + i, partial, sizeof(partial)) == 0)
+		{
+			std::stringstream ss;
+			ss << "  Candidate at offset 0x" << std::hex << i << ": ";
+			for (int j = 0; j < 32; j++)
+				ss << std::setw(2) << std::setfill('0') << (int)base[i + j] << " ";
+			diag_log(ss.str().c_str());
+			found++;
+		}
+	}
+	if (found == 0) diag_log("  No candidates found with standard prologue");
+}
+
+void discover_overlays_patterns(unsigned char* base, size_t size)
+{
+	diag_log("=== Pattern Discovery: Searching for OverlaysEnabled candidates ===");
+	// Look for: 83 3D xx xx xx xx xx 7x 04 (cmp dword ptr [rip+xx], xx; jz/jnz 04)
+	int found = 0;
+	for (size_t i = 0; i < size - 16 && found < 10; i++)
+	{
+		// Match: 83 3D ?? ?? ?? ?? ?? (74|75) 04
+		if (base[i] == 0x83 && base[i + 1] == 0x3D &&
+		    (base[i + 8] == 0x74 || base[i + 8] == 0x75) && base[i + 9] == 0x04)
+		{
+			std::stringstream ss;
+			ss << "  Candidate at offset 0x" << std::hex << i << ": ";
+			for (int j = 0; j < 16; j++)
+				ss << std::setw(2) << std::setfill('0') << (int)base[i + j] << " ";
+			diag_log(ss.str().c_str());
+			found++;
+		}
+	}
+	if (found == 0) diag_log("  No candidates found");
+}
+
 #define DIAG_LOG(x) diag_log(x)
 #define DIAG_LOG_BYTES(prefix, bytes, len) diag_log_bytes(prefix, bytes, len)
+#define DISCOVER_PATTERNS(base, size) do { discover_present_patterns(base, size); discover_directflip_patterns(base, size); discover_overlays_patterns(base, size); } while(0)
 #else
 #define DIAG_LOG(x)
 #define DIAG_LOG_BYTES(prefix, bytes, len)
+#define DISCOVER_PATTERNS(base, size)
 #endif
 
 
@@ -1207,6 +1274,13 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID lpReserved)
 				if (!COverlayContext_OverlaysEnabled_orig)
 				{
 					DIAG_LOG("ERROR: COverlayContext::OverlaysEnabled pattern NOT FOUND!");
+				}
+
+				// If any pattern was not found, run pattern discovery to find candidates
+				if (!COverlayContext_Present_orig || !COverlayContext_IsCandidateDirectFlipCompatbile_orig || !COverlayContext_OverlaysEnabled_orig)
+				{
+					DIAG_LOG("Running pattern discovery to find potential matches...");
+					DISCOVER_PATTERNS((unsigned char*)dwmcore, moduleInfo.SizeOfImage);
 				}
 
 				DWORD rev;
