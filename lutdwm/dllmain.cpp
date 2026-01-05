@@ -24,6 +24,8 @@
 #define RESIZE(x, y) realloc(x, (y) * sizeof(*x));
 #define LOG_FILE_PATH R"(C:\DWMLOG\dwm.log)"
 #define MAX_LOG_FILE_SIZE 20 * 1024 * 1024
+// Enable diagnostics logging even in release builds for debugging pattern matching issues
+#define ENABLE_DIAGNOSTICS true
 #ifdef _DEBUG
 #define DEBUG_MODE true
 #else
@@ -84,6 +86,52 @@
 #define EXECUTE_WITH_LOG(winapi_func_hr) winapi_func_hr;
 #define EXECUTE_D3DCOMPILE_WITH_LOG(winapi_func_hr, error_interface) winapi_func_hr;
 #define LOG_ADDRESS(prefix_message, address) // NOP, not in debug mode
+#endif
+
+// Diagnostics logging that works in both debug and release builds
+#if ENABLE_DIAGNOSTICS == true
+void diag_log(const char* log_buf)
+{
+	// Create directory if needed
+	CreateDirectoryA("C:\\DWMLOG", NULL);
+	FILE* pFile = fopen("C:\\DWMLOG\\dwm_diag.log", "a");
+	if (pFile == NULL) return;
+	fseek(pFile, 0, SEEK_END);
+	long size = ftell(pFile);
+	if (size > MAX_LOG_FILE_SIZE)
+	{
+		if (_chsize(_fileno(pFile), 0) == -1)
+		{
+			fclose(pFile);
+			return;
+		}
+	}
+	fseek(pFile, 0, SEEK_END);
+
+	// Add timestamp
+	SYSTEMTIME st;
+	GetLocalTime(&st);
+	fprintf(pFile, "[%02d:%02d:%02d.%03d] %s\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, log_buf);
+	fclose(pFile);
+}
+
+void diag_log_bytes(const char* prefix, const unsigned char* bytes, size_t len)
+{
+	std::stringstream ss;
+	ss << prefix;
+	for (size_t i = 0; i < len && i < 32; i++)
+	{
+		ss << std::hex << std::setw(2) << std::setfill('0') << (int)bytes[i] << " ";
+	}
+	if (len > 32) ss << "...";
+	diag_log(ss.str().c_str());
+}
+
+#define DIAG_LOG(x) diag_log(x)
+#define DIAG_LOG_BYTES(prefix, bytes, len) diag_log_bytes(prefix, bytes, len)
+#else
+#define DIAG_LOG(x)
+#define DIAG_LOG_BYTES(prefix, bytes, len)
 #endif
 
 
@@ -1025,9 +1073,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID lpReserved)
 	{
 	case DLL_PROCESS_ATTACH:
 		{
+			DIAG_LOG("=== DWM LUT DLL Attached ===");
+
 			HMODULE dwmcore = GetModuleHandle(L"dwmcore.dll");
 			MODULEINFO moduleInfo;
 			GetModuleInformation(GetCurrentProcess(), dwmcore, &moduleInfo, sizeof moduleInfo);
+
+			{
+				std::stringstream ss;
+				ss << "dwmcore.dll base: 0x" << std::hex << (UINT_PTR)dwmcore << " size: " << std::dec << moduleInfo.SizeOfImage;
+				DIAG_LOG(ss.str().c_str());
+			}
 
 			OSVERSIONINFOEX versionInfo;
 			ZeroMemory(&versionInfo, sizeof OSVERSIONINFOEX);
@@ -1049,16 +1105,19 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID lpReserved)
 				if (VerifyVersionInfo(&versionInfo, VER_BUILDNUMBER, dwlConditionMask))
 				{
 					isWindows11_24H2 = true;
+					DIAG_LOG("Detected Windows 11 24H2+ (Build >= 26100)");
 				}
 				else
 				{
 					isWindows11_24H2 = false;
+					DIAG_LOG("Detected Windows 11 (Build < 26100)");
 				}
 			}
 			else
 			{
 				isWindows11 = false;
 				isWindows11_24H2 = false;
+				DIAG_LOG("Detected Windows 10");
 			}
 
 			// TODO: Remove this debug instruction
@@ -1078,6 +1137,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID lpReserved)
 				size_t directFlipPatternSize = isWindows11_24H2 ? sizeof COverlayContext_IsCandidateDirectFlipCompatbile_bytes_w11_24H2 : sizeof COverlayContext_IsCandidateDirectFlipCompatbile_bytes_w11;
 				size_t overlaysEnabledPatternSize = isWindows11_24H2 ? sizeof COverlayContext_OverlaysEnabled_bytes_w11_24H2 : sizeof COverlayContext_OverlaysEnabled_bytes_w11;
 
+				DIAG_LOG_BYTES("Searching for Present pattern: ", presentPattern, presentPatternSize);
+				DIAG_LOG_BYTES("Searching for DirectFlip pattern: ", directFlipPattern, directFlipPatternSize);
+				DIAG_LOG_BYTES("Searching for OverlaysEnabled pattern: ", overlaysEnabledPattern, overlaysEnabledPatternSize);
+
 				for (size_t i = 0; i <= moduleInfo.SizeOfImage - overlaysEnabledPatternSize; i++)
 				{
 					unsigned char* address = (unsigned char*)dwmcore + i;
@@ -1090,6 +1153,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID lpReserved)
 
 						COverlayContext_Present_orig = (COverlayContext_Present_t*)address;
 						COverlayContext_Present_real_orig = COverlayContext_Present_orig;
+
+						std::stringstream ss;
+						ss << "Found COverlayContext::Present at offset 0x" << std::hex << i;
+						DIAG_LOG(ss.str().c_str());
+						DIAG_LOG_BYTES("  Bytes at location: ", address, 32);
 					}
 					else if (!COverlayContext_IsCandidateDirectFlipCompatbile_orig && directFlipPatternSize
 						<= moduleInfo.SizeOfImage - i && !
@@ -1099,6 +1167,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID lpReserved)
 					{
 						COverlayContext_IsCandidateDirectFlipCompatbile_orig = (
 							COverlayContext_IsCandidateDirectFlipCompatbile_t*)address;
+
+						std::stringstream ss;
+						ss << "Found COverlayContext::IsCandidateDirectFlipCompatbile at offset 0x" << std::hex << i;
+						DIAG_LOG(ss.str().c_str());
+						DIAG_LOG_BYTES("  Bytes at location: ", address, 32);
 					}
 					else if (!COverlayContext_OverlaysEnabled_orig && overlaysEnabledPatternSize
 						<= moduleInfo.SizeOfImage - i && !aob_match_inverse(
@@ -1106,20 +1179,46 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID lpReserved)
 							overlaysEnabledPatternSize))
 					{
 						COverlayContext_OverlaysEnabled_orig = (COverlayContext_OverlaysEnabled_t*)address;
+
+						std::stringstream ss;
+						ss << "Found COverlayContext::OverlaysEnabled at offset 0x" << std::hex << i;
+						DIAG_LOG(ss.str().c_str());
+						DIAG_LOG_BYTES("  Bytes at location: ", address, 32);
 					}
 					if (COverlayContext_Present_orig && COverlayContext_IsCandidateDirectFlipCompatbile_orig &&
 						COverlayContext_OverlaysEnabled_orig)
 					{
 						MESSAGE_BOX_DBG("All addresses successfully retrieved", MB_OK)
+						DIAG_LOG("All function addresses found successfully!");
 
 						break;
 					}
+				}
+
+				// Log what was NOT found
+				if (!COverlayContext_Present_orig)
+				{
+					DIAG_LOG("ERROR: COverlayContext::Present pattern NOT FOUND!");
+				}
+				if (!COverlayContext_IsCandidateDirectFlipCompatbile_orig)
+				{
+					DIAG_LOG("ERROR: COverlayContext::IsCandidateDirectFlipCompatbile pattern NOT FOUND!");
+				}
+				if (!COverlayContext_OverlaysEnabled_orig)
+				{
+					DIAG_LOG("ERROR: COverlayContext::OverlaysEnabled pattern NOT FOUND!");
 				}
 
 				DWORD rev;
 				DWORD revSize = sizeof(rev);
 				RegGetValueA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "UBR", RRF_RT_DWORD,
 				             NULL, &rev, &revSize);
+
+				{
+					std::stringstream ss;
+					ss << "Windows revision (UBR): " << rev;
+					DIAG_LOG(ss.str().c_str());
+				}
 
 				if (isWindows11_24H2)
 				{
@@ -1174,10 +1273,25 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID lpReserved)
 
 			char lutFolderPath[MAX_PATH];
 			ExpandEnvironmentStringsA(LUT_FOLDER, lutFolderPath, sizeof(lutFolderPath));
+
+			{
+				std::stringstream ss;
+				ss << "Looking for LUTs in: " << lutFolderPath;
+				DIAG_LOG(ss.str().c_str());
+			}
+
 			if (!AddLUTs(lutFolderPath))
 			{
+				DIAG_LOG("ERROR: Failed to load LUTs - returning FALSE");
 				return FALSE;
 			}
+
+			{
+				std::stringstream ss;
+				ss << "Loaded " << numLuts << " LUT(s)";
+				DIAG_LOG(ss.str().c_str());
+			}
+
 			char variable_message_states[300];
 			sprintf(variable_message_states, "Current variable states: COverlayContext::Present - %p\t"
 			        "COverlayContext::IsCandidateDirectFlipCompatible - %p\tCOverlayContext::OverlaysEnabled - %p",
@@ -1185,6 +1299,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID lpReserved)
 			        COverlayContext_IsCandidateDirectFlipCompatbile_orig, COverlayContext_OverlaysEnabled_orig);
 
 			MESSAGE_BOX_DBG(variable_message_states, MB_OK)
+			DIAG_LOG(variable_message_states);
 
 			if (COverlayContext_Present_orig && COverlayContext_IsCandidateDirectFlipCompatbile_orig &&
 				COverlayContext_OverlaysEnabled_orig && numLuts != 0)
@@ -1201,9 +1316,21 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID lpReserved)
 				MH_EnableHook(MH_ALL_HOOKS);
 				LOG_ONLY_ONCE("DWM HOOK DLL INITIALIZATION. START LOGGING")
 				MESSAGE_BOX_DBG("DWM HOOK INITIALIZATION", MB_OK)
+				DIAG_LOG("DWM Hook initialized successfully!");
 
 				break;
 			}
+
+			// Log failure reason
+			if (!COverlayContext_Present_orig)
+				DIAG_LOG("FAILURE: COverlayContext::Present not found");
+			if (!COverlayContext_IsCandidateDirectFlipCompatbile_orig)
+				DIAG_LOG("FAILURE: COverlayContext::IsCandidateDirectFlipCompatbile not found");
+			if (!COverlayContext_OverlaysEnabled_orig)
+				DIAG_LOG("FAILURE: COverlayContext::OverlaysEnabled not found");
+			if (numLuts == 0)
+				DIAG_LOG("FAILURE: No LUTs loaded");
+			DIAG_LOG("Returning FALSE from DllMain");
 			return FALSE;
 		}
 	case DLL_PROCESS_DETACH:
