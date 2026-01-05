@@ -86,3 +86,16 @@ jobs:
         }
         
         Write-Host "Build verification successful - All $($requiredFiles.Count) required files found"
+
+    - name: Create Release Package
+      run: |
+        mkdir ReleasePackage
+        copy "DwmLutGUI\DwmLutGUI\bin\x64\Release\*" ReleasePackage\
+        copy "x64\Release\dwm_lut.dll" ReleasePackage\
+
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: dwm_lut-build
+        path: ReleasePackage/
+        retention-days: 30
