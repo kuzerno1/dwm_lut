@@ -402,14 +402,46 @@ const unsigned char COverlayContext_OverlaysEnabled_bytes_w11_24H2[] = {
 	0x83, 0x3D, '?', '?', '?', '?', '?', 0x74, 0x04
 };
 
+/*
+ * Windows 11 25H2 (Build 26200+) AOB patterns
+ * Key changes from 24H2:
+ * - Present: Uses 48 83 EC (sub rsp, imm8) instead of 48 81 EC (sub rsp, imm32)
+ * - DirectFlip: Stack allocation changed from 0x70 to 0x78
+ * - OverlaysEnabled: Pattern structure changed, now uses simpler check
+ */
+
+// Present pattern for 25H2 - uses smaller stack allocation instruction
+// Pattern: 40 53 55 56 57 41 56 41 57 48 83 EC 68 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 44 24 50
+const unsigned char COverlayContext_Present_bytes_w11_25H2[] = {
+	0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x68, 0x48, 0x8B, 0x05,
+	'?', '?', '?', '?', 0x48, 0x33, 0xC4, 0x48, 0x89, 0x44, 0x24, 0x50
+};
+
+// DirectFlip pattern for 25H2 - stack allocation 0x78 instead of 0x70
+const unsigned char COverlayContext_IsCandidateDirectFlipCompatbile_bytes_w11_25H2[] = {
+	0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8B, 0xEC, 0x48, 0x83, 0xEC,
+	0x78, 0x48,
+};
+
+// OverlaysEnabled for 25H2 - uses test rax,rax; jnz pattern
+// Pattern: 48 8B 41 38 48 85 C0 75 04 32 C0 C3
+const unsigned char COverlayContext_OverlaysEnabled_bytes_w11_25H2[] = {
+	0x48, 0x8B, 0x41, 0x38, 0x48, 0x85, 0xC0, 0x75, 0x04, 0x32, 0xC0, 0xC3
+};
+
 int COverlayContext_DeviceClipBox_offset_w11 = 0x466C;
 int COverlayContext_DeviceClipBox_offset_w11_24H2 = 0x4680; // Updated offset for 24H2
+int COverlayContext_DeviceClipBox_offset_w11_25H2 = 0x4680; // Same as 24H2, may need adjustment
 
 const int IOverlaySwapChain_HardwareProtected_offset_w11 = -0x144;
 const int IOverlaySwapChain_HardwareProtected_offset_w11_24H2 = -0x14C; // Updated offset for 24H2
+const int IOverlaySwapChain_HardwareProtected_offset_w11_25H2 = -0x14C; // Same as 24H2, may need adjustment
+
+const int IOverlaySwapChain_IDXGISwapChain_offset_w11_25H2 = 0xE8; // Same as 24H2, may need adjustment
 
 bool isWindows11;
 bool isWindows11_24H2;
+bool isWindows11_25H2;
 
 bool aob_match_inverse(const void* buf1, const void* mask, const int buf_len)
 {
@@ -1139,7 +1171,12 @@ long COverlayContext_Present_hook(void* self, void* overlaySwapChain, unsigned i
 		int hardwareProtectedOffset = IOverlaySwapChain_HardwareProtected_offset;
 		if (isWindows11)
 		{
-			hardwareProtectedOffset = isWindows11_24H2 ? IOverlaySwapChain_HardwareProtected_offset_w11_24H2 : IOverlaySwapChain_HardwareProtected_offset_w11;
+			if (isWindows11_25H2)
+				hardwareProtectedOffset = IOverlaySwapChain_HardwareProtected_offset_w11_25H2;
+			else if (isWindows11_24H2)
+				hardwareProtectedOffset = IOverlaySwapChain_HardwareProtected_offset_w11_24H2;
+			else
+				hardwareProtectedOffset = IOverlaySwapChain_HardwareProtected_offset_w11;
 		}
 
 		if (*((bool*)overlaySwapChain + hardwareProtectedOffset))
@@ -1166,7 +1203,13 @@ long COverlayContext_Present_hook(void* self, void* overlaySwapChain, unsigned i
 				int sub_from_legacy_swapchain = *(int*)((unsigned char*)overlaySwapChain - 4);
 				void* real_overlay_swap_chain = (unsigned char*)overlaySwapChain - sub_from_legacy_swapchain -
 					0x1b0;
-				int idxgiSwapChainOffset = isWindows11_24H2 ? IOverlaySwapChain_IDXGISwapChain_offset_w11_24H2 : IOverlaySwapChain_IDXGISwapChain_offset_w11;
+				int idxgiSwapChainOffset;
+				if (isWindows11_25H2)
+					idxgiSwapChainOffset = IOverlaySwapChain_IDXGISwapChain_offset_w11_25H2;
+				else if (isWindows11_24H2)
+					idxgiSwapChainOffset = IOverlaySwapChain_IDXGISwapChain_offset_w11_24H2;
+				else
+					idxgiSwapChainOffset = IOverlaySwapChain_IDXGISwapChain_offset_w11;
 				swapChain = *(IDXGISwapChain**)((unsigned char*)real_overlay_swap_chain +
 					idxgiSwapChainOffset);
 			}
@@ -1251,26 +1294,43 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID lpReserved)
 			{
 				isWindows11 = true;
 
-				// Check for Windows 11 24H2 (Build 26100+)
-				versionInfo.dwBuildNumber = 26100;
+				// Check for Windows 11 25H2 (Build 26200+) first
+				versionInfo.dwBuildNumber = 26200;
 				dwlConditionMask = 0;
 				VER_SET_CONDITION(dwlConditionMask, VER_BUILDNUMBER, VER_GREATER_EQUAL);
 
 				if (VerifyVersionInfo(&versionInfo, VER_BUILDNUMBER, dwlConditionMask))
 				{
-					isWindows11_24H2 = true;
-					DIAG_LOG("Detected Windows 11 24H2+ (Build >= 26100)");
+					isWindows11_25H2 = true;
+					isWindows11_24H2 = true; // 25H2 implies 24H2+
+					DIAG_LOG("Detected Windows 11 25H2+ (Build >= 26200)");
 				}
 				else
 				{
-					isWindows11_24H2 = false;
-					DIAG_LOG("Detected Windows 11 (Build < 26100)");
+					isWindows11_25H2 = false;
+
+					// Check for Windows 11 24H2 (Build 26100+)
+					versionInfo.dwBuildNumber = 26100;
+					dwlConditionMask = 0;
+					VER_SET_CONDITION(dwlConditionMask, VER_BUILDNUMBER, VER_GREATER_EQUAL);
+
+					if (VerifyVersionInfo(&versionInfo, VER_BUILDNUMBER, dwlConditionMask))
+					{
+						isWindows11_24H2 = true;
+						DIAG_LOG("Detected Windows 11 24H2 (Build >= 26100, < 26200)");
+					}
+					else
+					{
+						isWindows11_24H2 = false;
+						DIAG_LOG("Detected Windows 11 (Build < 26100)");
+					}
 				}
 			}
 			else
 			{
 				isWindows11 = false;
 				isWindows11_24H2 = false;
+				isWindows11_25H2 = false;
 				DIAG_LOG("Detected Windows 10");
 			}
 
@@ -1282,14 +1342,44 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID lpReserved)
 				// TODO: Remove this debug instruction
 				MESSAGE_BOX_DBG("DETECTED WINDOWS 11 OS", MB_OK)
 
-				// Use 24H2 patterns if detected, otherwise fall back to regular Windows 11 patterns
-				const unsigned char* presentPattern = isWindows11_24H2 ? COverlayContext_Present_bytes_w11_24H2 : COverlayContext_Present_bytes_w11;
-				const unsigned char* directFlipPattern = isWindows11_24H2 ? COverlayContext_IsCandidateDirectFlipCompatbile_bytes_w11_24H2 : COverlayContext_IsCandidateDirectFlipCompatbile_bytes_w11;
-				const unsigned char* overlaysEnabledPattern = isWindows11_24H2 ? COverlayContext_OverlaysEnabled_bytes_w11_24H2 : COverlayContext_OverlaysEnabled_bytes_w11;
+				// Select patterns based on Windows version
+				const unsigned char* presentPattern;
+				const unsigned char* directFlipPattern;
+				const unsigned char* overlaysEnabledPattern;
+				size_t presentPatternSize;
+				size_t directFlipPatternSize;
+				size_t overlaysEnabledPatternSize;
 
-				size_t presentPatternSize = isWindows11_24H2 ? sizeof COverlayContext_Present_bytes_w11_24H2 : sizeof COverlayContext_Present_bytes_w11;
-				size_t directFlipPatternSize = isWindows11_24H2 ? sizeof COverlayContext_IsCandidateDirectFlipCompatbile_bytes_w11_24H2 : sizeof COverlayContext_IsCandidateDirectFlipCompatbile_bytes_w11;
-				size_t overlaysEnabledPatternSize = isWindows11_24H2 ? sizeof COverlayContext_OverlaysEnabled_bytes_w11_24H2 : sizeof COverlayContext_OverlaysEnabled_bytes_w11;
+				if (isWindows11_25H2)
+				{
+					presentPattern = COverlayContext_Present_bytes_w11_25H2;
+					directFlipPattern = COverlayContext_IsCandidateDirectFlipCompatbile_bytes_w11_25H2;
+					overlaysEnabledPattern = COverlayContext_OverlaysEnabled_bytes_w11_25H2;
+					presentPatternSize = sizeof COverlayContext_Present_bytes_w11_25H2;
+					directFlipPatternSize = sizeof COverlayContext_IsCandidateDirectFlipCompatbile_bytes_w11_25H2;
+					overlaysEnabledPatternSize = sizeof COverlayContext_OverlaysEnabled_bytes_w11_25H2;
+					DIAG_LOG("Using Windows 11 25H2 patterns");
+				}
+				else if (isWindows11_24H2)
+				{
+					presentPattern = COverlayContext_Present_bytes_w11_24H2;
+					directFlipPattern = COverlayContext_IsCandidateDirectFlipCompatbile_bytes_w11_24H2;
+					overlaysEnabledPattern = COverlayContext_OverlaysEnabled_bytes_w11_24H2;
+					presentPatternSize = sizeof COverlayContext_Present_bytes_w11_24H2;
+					directFlipPatternSize = sizeof COverlayContext_IsCandidateDirectFlipCompatbile_bytes_w11_24H2;
+					overlaysEnabledPatternSize = sizeof COverlayContext_OverlaysEnabled_bytes_w11_24H2;
+					DIAG_LOG("Using Windows 11 24H2 patterns");
+				}
+				else
+				{
+					presentPattern = COverlayContext_Present_bytes_w11;
+					directFlipPattern = COverlayContext_IsCandidateDirectFlipCompatbile_bytes_w11;
+					overlaysEnabledPattern = COverlayContext_OverlaysEnabled_bytes_w11;
+					presentPatternSize = sizeof COverlayContext_Present_bytes_w11;
+					directFlipPatternSize = sizeof COverlayContext_IsCandidateDirectFlipCompatbile_bytes_w11;
+					overlaysEnabledPatternSize = sizeof COverlayContext_OverlaysEnabled_bytes_w11;
+					DIAG_LOG("Using Windows 11 (pre-24H2) patterns");
+				}
 
 				DIAG_LOG_BYTES("Searching for Present pattern: ", presentPattern, presentPatternSize);
 				DIAG_LOG_BYTES("Searching for DirectFlip pattern: ", directFlipPattern, directFlipPatternSize);
@@ -1381,7 +1471,15 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID lpReserved)
 					DIAG_LOG(ss.str().c_str());
 				}
 
-				if (isWindows11_24H2)
+				if (isWindows11_25H2)
+				{
+					MESSAGE_BOX_DBG("Detected Windows 11 25H2", MB_OK)
+
+					// Use 25H2 specific offsets
+					COverlayContext_DeviceClipBox_offset_w11 = COverlayContext_DeviceClipBox_offset_w11_25H2;
+					// Note: HardwareProtected_offset is handled separately in the hooking code
+				}
+				else if (isWindows11_24H2)
 				{
 					MESSAGE_BOX_DBG("Detected Windows 11 24H2", MB_OK)
 
